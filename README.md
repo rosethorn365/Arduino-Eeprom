@@ -17,3 +17,6 @@ HARJOITUS 4.3
   - Lämpötila lasketaan LT = ((5 * avgADC / 1024.0) - 0.5) * 100
   - Painonappi pinnissä 3 tulostaa EEPROM-muistin sarjaporttiin 
   - Painonappi pinnissä tyhjentää EEPROM-muistin (kirjoittaa 0kaikkiin paikkoihin)
+
+    <img width="912" height="755" alt="image" src="https://github.com/user-attachments/assets/08c1b8c9-7cb1-49dd-9be1-75b74558a789" />
+
