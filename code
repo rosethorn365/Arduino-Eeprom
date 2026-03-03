@@ -1,0 +1,208 @@
+
+
+// PINNIT
+
+const int nappi_kirjoita_muistiin = 13;  // mukana vanhasta pohjasta (EI käytössä tässä tehtävässä)
+const int nappi_tulosta          = 3;    // painonappi 1 (keskeytys)
+const int nappi_tyhjenna         = 2;    // painonappi 2 (keskeytys)
+const int lampotilaPin           = A0;   // TMP36 analogipinni
+
+// EEPROM-muuttujat
+
+int muistipaikka = 0;        // EEPROMin muistipaikka
+int edellinenAvgADC = -1;    // edellinen avgADC
+
+
+// Keskeytysliput
+
+volatile bool pyydaTulostus = false;
+volatile bool pyydaTyhjennys = false;
+
+const unsigned long delayMs = 200; // nappien debounce
+
+
+// Ajastus 5 sek välein (timer-mallilla)
+// timer kasvaa aina +5000
+unsigned long timer = 0;
+unsigned long timeNow = 0;
+const unsigned long mittausValiMs = 5000;
+
+// TMP36 keskiarvo: 50 näytettä
+
+const int naytteita = 50;
+const int nayteValiMs = 2;
+
+// ISR:t (vain pyynnöt päälle)
+void ISR_tulosta() {
+  pyydaTulostus = true;
+}
+
+void ISR_tyhjenna() {
+  pyydaTyhjennys = true;
+}
+
+// Lue 50 ADC-arvoa ja laske keskiarvo (avgADC)
+int lueAvgADC() {
+  unsigned long summa = 0;
+
+  for (int i = 0; i < naytteita; i++) {
+    summa += analogRead(lampotilaPin);  // 0..1023
+    delay(nayteValiMs);
+  }
+
+  return (int)(summa / naytteita);
+}
+
+// Muunnos kaavalla 
+// LT = ((5 * avgADC / 1024.0) - 0.5) * 100
+
+float adcToLampotila(int avgADC) {
+  return ((5.0 * avgADC / 1024.0) - 0.5) * 100.0;
+}
+
+//TULOSTUSRIVI
+
+void tulostaRivi(byte aikaSek, int adc10) {
+  Serial.print("Aika: ");
+  Serial.print(aikaSek);
+  Serial.print("     ");        // 5 välilyöntiä
+
+  Serial.print("ADC: ");
+  Serial.print(adc10);
+  Serial.print("     ");        // 5 välilyöntiä
+
+  Serial.print("LT: ");
+  Serial.println(adcToLampotila(adc10), 2); // 2 desimaalia (esim. 22.75)
+}
+
+// 10) Mittaus & kirjoitus -aliohjelma (5s välein)
+
+void mittaaJaKirjoitaEEPROMiin() {
+
+  // kasvatetaan timeria 5000 ms (pyytämäsi malli)
+  timer += mittausValiMs;
+
+  // luetaan uusi keskiarvo
+  int avgADC = lueAvgADC();
+
+  // tallennetaan vain jos muuttui (tai ensimmäinen mittaus)
+  if (edellinenAvgADC == -1 || avgADC != edellinenAvgADC) {
+
+    // aika sekunteina: 5, 10, 15, ...
+    byte aikaSek = (byte)(timer / 1000UL);
+
+    // pakataan ADC 8-bittiseksi: 0..1023 -> 0..255
+    byte adc8 = (byte)(avgADC >> 2);
+
+    // muisti täynnä -> aloita alusta (TÄSMÄLLEEN pyytämäsi ehto)
+    if ((muistipaikka + 1) > (EEPROM.length() - 1)) {
+      muistipaikka = 0;
+    }
+
+    // kirjoita [aika][adc8]
+    EEPROM.update(muistipaikka, aikaSek);
+    EEPROM.update(muistipaikka + 1, adc8);
+
+    // kasvata osoitetta kahdella (tehtävänanto)
+    muistipaikka += 2;
+
+    // tallenna edellinen arvo
+    edellinenAvgADC = avgADC;
+
+    // DEBUG: siisti tuloste (käytetään avgADC:tä 10-bittisenä)
+    tulostaRivi(aikaSek, avgADC);
+  }
+}
+
+// 11) Tulosta EEPROM: Aika, ADC, LT
+
+void tulostaEEPROM() {
+  Serial.println();
+  Serial.println("EEPROM SISALTO:");
+  Serial.println("-----------------------------------------------");
+
+  for (int i = 0; i + 1 < EEPROM.length(); i += 2) {
+
+    byte aikaSek = EEPROM.read(i);
+    byte adc8    = EEPROM.read(i + 1);
+
+    // tyhjä merkintä
+    if (aikaSek == 0 && adc8 == 0) {
+      continue;
+    }
+
+    // palautetaan likimääräinen 10-bittinen ADC
+    int adc10 = ((int)adc8) << 2;  // *4
+
+    // tulosta sama siisti muoto
+    tulostaRivi(aikaSek, adc10);
+  }
+
+  Serial.println("-----------------------------------------------");
+  Serial.println("Tulostus valmis.");
+  Serial.println();
+}
+
+// 12) Tyhjennä EEPROM
+
+void tyhjennaEEPROM() {
+  Serial.println();
+  Serial.println("Tyhjennetaan EEPROM...");
+
+  for (int i = 0; i < EEPROM.length(); i++) {
+    EEPROM.update(i, 0);
+  }
+
+  muistipaikka = 0;
+  edellinenAvgADC = -1;
+  timer = 0;
+
+  Serial.println("EEPROM on tyhja.");
+  Serial.println();
+}
+
+
+void setup() {
+  Serial.begin(9600);
+
+  pinMode(nappi_kirjoita_muistiin, INPUT_PULLUP); // mukana vain pohjan vuoksi
+  pinMode(nappi_tulosta, INPUT_PULLUP);
+  pinMode(nappi_tyhjenna, INPUT_PULLUP);
+
+  // Arduino Uno: keskeytykset pinneissä 2 ja 3
+  attachInterrupt(digitalPinToInterrupt(nappi_tulosta), ISR_tulosta, FALLING);
+  attachInterrupt(digitalPinToInterrupt(nappi_tyhjenna), ISR_tyhjenna, FALLING);
+
+  Serial.println("Ohjelma alkaa >>>");
+  Serial.println("Nappi pinnissa 3 tulostaa EEPROM-muistin");
+  Serial.println("Nappi pinnissa 2 tyhjentaa EEPROM-muistin");
+  Serial.println();
+}
+
+void loop() {
+  timeNow = millis();
+
+  // 5 sek välein mittaus
+  if (timeNow - timer >= mittausValiMs) {
+
+    // ottaa kiinni jos loop viivästyy -> rytmi 5,10,15...
+    while (timeNow - timer >= mittausValiMs) {
+      mittaaJaKirjoitaEEPROMiin();
+    }
+  }
+
+  // tulostusnappi
+  if (pyydaTulostus) {
+    pyydaTulostus = false;
+    tulostaEEPROM();
+    delay(delayMs);
+  }
+
+  // tyhjennysnappi
+  if (pyydaTyhjennys) {
+    pyydaTyhjennys = false;
+    tyhjennaEEPROM();
+    delay(delayMs);
+  }
+}
+
